@@ -2,10 +2,10 @@
 
 ## Project
 
-**docfetch** — Go CLI to clone only a GitHub repo's documentation (docs/directory + README i18n variants) via `git sparse-checkout` + `--filter=blob:none`.
+**docfetch** — Go CLI to clone only a git hosting platform repo's documentation (docs/directory + README i18n variants) via `git sparse-checkout` + `--filter=blob:none`.
 
 - Module: `github.com/Hans-Kerman/docfetch` / Go ≥ 1.26.5
-- Commands: `docfetch [-o dir] <github-url>` (q.v. design section for flow)
+- Commands: `docfetch [-o dir] <repo-url>` (q.v. design section for flow)
 - No external dependencies (exec `git` directly; not go-git nor GitHub API)
 - Single-file project: all logic in `main.go`; tests in `main_test.go`
 - Uses Go 1.26 idioms: `errors.AsType` for exit-error stderr extraction; `strings.SplitSeq` for line iteration
@@ -13,7 +13,7 @@
 ## Design
 
 Data flow:
-1. Parse GitHub URL → owner, repo
+1. Parse repo URL → owner, repo
 2. Compute target dir: `-o` flag else `owner--repo`
 3. `git clone --filter=blob:none --no-checkout <url> <dir>`
 4. Determine default branch: `git symbolic-ref origin/HEAD`
@@ -28,7 +28,7 @@ Data flow:
 
 1. **`main.go`** — CLI entry, orchestration
 2. **Pure functions** (table-driven tests):
-   - `parseRepoURL` — supports `https://github.com/`, `git@github.com:`, trailing `.git`, slashes
+   - `parseRepoURL` — supports `https://<host>/` and `git@<host>:` URLs, trailing `.git`, slashes
    - `isReadmeFile` — lowercase name, exact match against allowed list (see below)
    - `isDocsDir` — matches `docs`, `doc`, `wiki`, `documentation`, `manual`, `guide` (case-insensitive)
    - `buildSparsePatterns` — assembles sparse-checkout patterns (dirs: `docs/`; files: `/README.md`)
@@ -58,13 +58,12 @@ Only `.md` extension. Only Chinese variants (zh, zh-CN, zh-Hans). No regex.
 ### YAGNI (v1 not)
 
 - `pull`/update subcommand (v1 is fresh-clone only)
-- Non-GitHub URLs
 - Credential caching
 
 ## Commands
 
 - Build: `go build -o docfetch .`
-- Run: `go run . [-o dir] <github-url>`
+- Run: `go run . [-o dir] <repo-url>`
 - Test: `go test ./...`
 - Test single function with verbose: `go test -run TestParseRepoURL -v ./...`
 - Lint (if present): `golangci-lint run ./...`

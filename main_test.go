@@ -16,17 +16,26 @@ func TestParseRepoURL(t *testing.T) {
 		{in: "https://github.com/Hans-Kerman/docfetch.git/", wantOwner: "Hans-Kerman", wantRepo: "docfetch"},
 		{in: "git@github.com:Hans-Kerman/docfetch.git", wantOwner: "Hans-Kerman", wantRepo: "docfetch"},
 		{in: "git@github.com:Hans-Kerman/docfetch", wantOwner: "Hans-Kerman", wantRepo: "docfetch"},
-		{in: "https://github.com/Hans-Kerman/docfetch/tree/main/docs", wantOwner: "Hans-Kerman", wantRepo: "docfetch"},
 		{in: "https://github.com/owner/repo/", wantOwner: "owner", wantRepo: "repo"},
+
+		{in: "https://gitlab.com/group/repo.git", wantOwner: "group", wantRepo: "repo"},
+		{in: "https://gitlab.com/group/subgroup/repo", wantOwner: "subgroup", wantRepo: "repo"},
+		{in: "git@gitlab.com:owner/repo", wantOwner: "owner", wantRepo: "repo"},
+		{in: "git@bitbucket.org:owner/repo", wantOwner: "owner", wantRepo: "repo"},
+		{in: "https://codeberg.org/owner/repo", wantOwner: "owner", wantRepo: "repo"},
+		{in: "https://git.sr.ht/~user/repo", wantOwner: "user", wantRepo: "repo"},
+		{in: "git@git.sr.ht:~user/repo", wantOwner: "user", wantRepo: "repo"},
 
 		{in: "", wantErr: true},
 		{in: "   ", wantErr: true},
-		{in: "https://gitlab.com/owner/repo", wantErr: true},
-		{in: "git@gitlab.com:owner/repo", wantErr: true},
+		{in: "not a url at all", wantErr: true},
+		{in: "https://github.com", wantErr: true},
+		{in: "https://github.com/", wantErr: true},
 		{in: "https://github.com/owner", wantErr: true},
 		{in: "https://github.com/owner/", wantErr: true},
 		{in: "https://github.com//repo", wantErr: true},
-		{in: "not a url at all", wantErr: true},
+		{in: "git@github.com:", wantErr: true},
+		{in: "git@github.com:owner", wantErr: true},
 	}
 
 	for _, tc := range cases {

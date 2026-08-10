@@ -29,7 +29,7 @@ func main() {
 }
 
 // run is the CLI entry point, returning a process exit code.
-// Usage: docfetch [-o dir] <github-url>
+// Usage: docfetch [-o dir] <repo-url>
 func run(args []string) int {
 	fs := flag.NewFlagSet("docfetch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -38,7 +38,7 @@ func run(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: docfetch [-o dir] <github-url>")
+		fmt.Fprintln(os.Stderr, "usage: docfetch [-o dir] <repo-url>")
 		return 2
 	}
 	rawURL := fs.Arg(0)
@@ -112,9 +112,11 @@ func run(args []string) int {
 	return 0
 }
 
-// parseRepoURL extracts owner and repo from a GitHub URL.
-// Supports https://github.com/<owner>/<repo> and git@github.com:<owner>/<repo>,
-// with optional trailing .git and/or slashes. Extra path segments are ignored.
+// parseRepoURL extracts owner and repo from a git hosting platform URL.
+// Supports https://<host>/<owner>/<repo> and git@<host>:<owner>/<repo>,
+// with optional trailing .git and/or slashes. The last two path segments
+// are used, so nested group paths (e.g. GitLab's group/subgroup/repo) parse
+// to subgroup/repo. A leading "~" on the owner segment (sourcehut) is trimmed.
 func parseRepoURL(raw string) (owner, repo string, err error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -122,13 +124,22 @@ func parseRepoURL(raw string) (owner, repo string, err error) {
 	}
 
 	var rest string
+	var ok bool
 	switch {
-	case strings.HasPrefix(s, "https://github.com/"):
-		rest = strings.TrimPrefix(s, "https://github.com/")
-	case strings.HasPrefix(s, "git@github.com:"):
-		rest = strings.TrimPrefix(s, "git@github.com:")
+	case strings.HasPrefix(s, "https://"):
+		// Drop the host; keep everything after the first "/".
+		_, rest, ok = strings.Cut(strings.TrimPrefix(s, "https://"), "/")
+		if !ok {
+			return "", "", fmt.Errorf("invalid repo URL: %q", raw)
+		}
+	case strings.HasPrefix(s, "git@"):
+		// scp-like syntax: path follows the first ":".
+		_, rest, ok = strings.Cut(s, ":")
+		if !ok {
+			return "", "", fmt.Errorf("invalid repo URL: %q", raw)
+		}
 	default:
-		return "", "", fmt.Errorf("not a GitHub URL: %q", raw)
+		return "", "", fmt.Errorf("not a recognized repo URL: %q", raw)
 	}
 
 	// Strip trailing slash, .git, then a possible slash again.
@@ -137,10 +148,12 @@ func parseRepoURL(raw string) (owner, repo string, err error) {
 	rest = strings.TrimSuffix(rest, "/")
 
 	parts := strings.Split(rest, "/")
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("invalid GitHub URL: %q", raw)
+	if len(parts) < 2 || parts[len(parts)-2] == "" || parts[len(parts)-1] == "" {
+		return "", "", fmt.Errorf("invalid repo URL: %q", raw)
 	}
-	return parts[0], parts[1], nil
+	owner = strings.TrimPrefix(parts[len(parts)-2], "~")
+	repo = parts[len(parts)-1]
+	return owner, repo, nil
 }
 
 // isReadmeFile reports whether name is a README variant docfetch pulls.
