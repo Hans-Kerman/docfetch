@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"io"
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestParseRepoURL(t *testing.T) {
 	t.Parallel()
@@ -161,5 +167,58 @@ func TestBuildSparsePatterns(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewLoggerDefault(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newLogger(&buf, false)
+
+	logger.Info("正在克隆 https://example.com/repo → dir")
+	logger.Warn("仓库根目录未找到任何 docs/README 条目，工作树可能为空")
+	logger.Error("clone failed: 无法解析主机")
+	logger.Debug("默认分支：main")
+
+	want := "docfetch: 正在克隆 https://example.com/repo → dir\n" +
+		"docfetch: 警告：仓库根目录未找到任何 docs/README 条目，工作树可能为空\n" +
+		"docfetch: 错误：clone failed: 无法解析主机\n"
+	if got := buf.String(); got != want {
+		t.Errorf("default logger output = %q, want %q", got, want)
+	}
+}
+
+func TestNewLoggerVerbose(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newLogger(&buf, true)
+
+	logger.Debug("默认分支：main")
+	logger.Info("克隆完成")
+
+	want := "docfetch: [debug] 默认分支：main\n" +
+		"docfetch: 克隆完成\n"
+	if got := buf.String(); got != want {
+		t.Errorf("verbose logger output = %q, want %q", got, want)
+	}
+}
+
+func TestRunGitPassesStderrThrough(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() failed: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = w
+	defer func() {
+		os.Stderr = oldStderr
+		w.Close()
+	}()
+
+	_, _ = runGit("", "definitely-not-a-real-git-command")
+
+	os.Stderr = oldStderr
+	w.Close()
+	out, _ := io.ReadAll(r)
+	if !strings.Contains(string(out), "definitely-not-a-real-git-command") {
+		t.Errorf("stderr passthrough = %q, want git's stderr text", out)
 	}
 }

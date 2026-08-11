@@ -5,10 +5,10 @@
 **docfetch** — Go CLI to clone only a git hosting platform repo's documentation (docs/directory + README i18n variants) via `git sparse-checkout` + `--filter=blob:none`.
 
 - Module: `github.com/Hans-Kerman/docfetch` / Go ≥ 1.26.5
-- Commands: `docfetch [-o dir] <repo-url>` (q.v. design section for flow)
+- Commands: `docfetch [-o dir] [-v] <repo-url>` (q.v. design section for flow)
 - No external dependencies (exec `git` directly; not go-git nor GitHub API)
 - Single-file project: all logic in `main.go`; tests in `main_test.go`
-- Uses Go 1.26 idioms: `errors.AsType` for exit-error stderr extraction; `strings.SplitSeq` for line iteration
+- Uses Go 1.26 idioms: `strings.SplitSeq` for line iteration; stderr capture via `io.MultiWriter`
 
 ## Design
 
@@ -23,6 +23,16 @@ Data flow:
 8. `git sparse-checkout set <patterns>` (gitignore syntax: `docs/`, `/README.md`)
 9. `git checkout <branch>`
 10. Working tree: only docs dirs + README files + `.git`
+
+### Logging
+
+- All user-facing output via `log/slog` (stdlib, no deps) → stderr:
+  info `docfetch: <msg>` / debug `docfetch: [debug] <msg>` / warn `docfetch: 警告：…` / error `docfetch: 错误：…`, messages in Chinese
+- Default level Info (key steps); `-v` flag enables Debug (branch, matched
+  entries, sparse patterns, per-git-command echo)
+- git stderr is always passed through in real time (clone progress visible),
+  and simultaneously captured for error messages
+- Usage/flag-parse errors stay as plain stderr (logger not set up yet)
 
 ### Components (independent, table-testable)
 

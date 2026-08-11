@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"slices"
@@ -24,28 +28,74 @@ var docsDirs = []string{
 	"docs", "doc", "wiki", "documentation", "manual", "guide",
 }
 
+// cliHandler is a slog.Handler printing plain, human-readable lines:
+//   - info:  "docfetch: <msg>"
+//   - debug: "docfetch: [debug] <msg>"
+//   - warn:  "docfetch: 警告：<msg>"
+//   - error: "docfetch: 错误：<msg>"
+//
+// Writes to w (stderr for the CLI).
+type cliHandler struct {
+	level slog.Level
+	w     io.Writer
+}
+
+// newLogger builds a slog.Logger writing to w. verbose=true enables debug level.
+func newLogger(w io.Writer, verbose bool) *slog.Logger {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	return slog.New(&cliHandler{level: level, w: w})
+}
+
+func (h *cliHandler) Enabled(_ context.Context, l slog.Level) bool {
+	return l >= h.level
+}
+
+func (h *cliHandler) Handle(_ context.Context, r slog.Record) error {
+	var prefix string
+	switch r.Level {
+	case slog.LevelDebug:
+		prefix = "docfetch: [debug] "
+	case slog.LevelWarn:
+		prefix = "docfetch: 警告："
+	case slog.LevelError:
+		prefix = "docfetch: 错误："
+	default:
+		prefix = "docfetch: "
+	}
+	_, err := fmt.Fprintf(h.w, "%s%s\n", prefix, r.Message)
+	return err
+}
+
+func (h *cliHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *cliHandler) WithGroup(_ string) slog.Handler      { return h }
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 // run is the CLI entry point, returning a process exit code.
-// Usage: docfetch [-o dir] <repo-url>
+// Usage: docfetch [-o dir] [-v] <repo-url>
 func run(args []string) int {
 	fs := flag.NewFlagSet("docfetch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	out := fs.String("o", "", "target directory (default: owner--repo)")
+	verbose := fs.Bool("v", false, "verbose: debug-level output")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: docfetch [-o dir] <repo-url>")
+		fmt.Fprintln(os.Stderr, "usage: docfetch [-o dir] [-v] <repo-url>")
 		return 2
 	}
+	slog.SetDefault(newLogger(os.Stderr, *verbose))
 	rawURL := fs.Arg(0)
 
 	owner, repo, err := parseRepoURL(rawURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "docfetch: %v\n", err)
+		slog.Error(err.Error())
 		return 1
 	}
 
@@ -55,29 +105,32 @@ func run(args []string) int {
 	}
 
 	if exists, nonEmpty := dirState(dir); exists && nonEmpty {
-		fmt.Fprintf(os.Stderr, "docfetch: target directory %q exists and is non-empty\n", dir)
+		slog.Error(fmt.Sprintf("目标目录 %q 已存在且非空", dir))
 		return 1
 	}
 
 	if _, err := exec.LookPath("git"); err != nil {
-		fmt.Fprintln(os.Stderr, "docfetch: git not found in PATH (is git installed?)")
+		slog.Error("PATH 中未找到 git（是否已安装？）")
 		return 1
 	}
 
+	slog.Info(fmt.Sprintf("正在克隆 %s → %s", rawURL, dir))
 	if err := cloneRepo(rawURL, dir); err != nil {
-		fmt.Fprintf(os.Stderr, "docfetch: clone failed: %v\n", err)
+		slog.Error(err.Error())
 		return 1
 	}
+	slog.Info("克隆完成")
 
 	branch, err := defaultBranch(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "docfetch: cannot determine default branch: %v\n", err)
+		slog.Error(err.Error())
 		return 1
 	}
+	slog.Debug("默认分支：" + branch)
 
 	entries, err := listRootEntries(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "docfetch: listing root entries failed: %v\n", err)
+		slog.Error(err.Error())
 		return 1
 	}
 
@@ -92,23 +145,33 @@ func run(args []string) int {
 	}
 
 	if len(foundDirs) == 0 && len(foundReadmes) == 0 {
-		fmt.Fprintln(os.Stderr, "docfetch: warning: no README or docs entries found at repo root")
+		slog.Warn("仓库根目录未找到任何 docs/README 条目，工作树可能为空")
+	} else {
+		slog.Info(fmt.Sprintf("找到 %d 个文档目录、%d 个 README 文件", len(foundDirs), len(foundReadmes)))
 	}
 
+	matched := make([]string, 0, len(foundDirs)+len(foundReadmes))
+	for _, d := range foundDirs {
+		matched = append(matched, d+"/")
+	}
+	matched = append(matched, foundReadmes...)
+	slog.Debug("根目录匹配：" + strings.Join(matched, "、"))
+
 	patterns := buildSparsePatterns(foundDirs, foundReadmes)
+	slog.Debug("sparse patterns：" + strings.Join(patterns, ", "))
 
 	if err := sparseCheckout(dir, patterns); err != nil {
-		fmt.Fprintf(os.Stderr, "docfetch: sparse-checkout failed: %v\n", err)
+		slog.Error(err.Error())
 		return 1
 	}
 
 	if err := checkoutBranch(dir, branch); err != nil {
-		fmt.Fprintf(os.Stderr, "docfetch: checkout failed: %v\n", err)
+		slog.Error(err.Error())
 		return 1
 	}
 
-	fmt.Fprintf(os.Stderr, "docfetch: %s -> %s (branch %s): %d doc dir(s), %d README file(s)\n",
-		rawURL, dir, branch, len(foundDirs), len(foundReadmes))
+	slog.Info(fmt.Sprintf("完成：%s → %s（分支 %s，%d 个文档目录，%d 个 README 文件）",
+		rawURL, dir, branch, len(foundDirs), len(foundReadmes)))
 	return 0
 }
 
@@ -183,18 +246,21 @@ func buildSparsePatterns(dirNames, fileNames []string) []string {
 }
 
 // runGit executes git with args, optionally inside dir (cmd.Dir).
-// On non-zero exit it returns an error carrying git's stderr verbatim.
+// git's stderr is passed through to the CLI's stderr in real time (clone
+// progress etc.) while also being captured; on non-zero exit the returned
+// error carries the captured stderr verbatim.
 func runGit(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	slog.Debug("git: " + strings.Join(args, " "))
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 	out, err := cmd.Output()
 	if err != nil {
-		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
-			if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {
-				return out, fmt.Errorf("git %s: %s", strings.Join(args, " "), stderr)
-			}
+		if stderr := strings.TrimSpace(stderrBuf.String()); stderr != "" {
+			return out, fmt.Errorf("git %s: %s", strings.Join(args, " "), stderr)
 		}
 		return out, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
