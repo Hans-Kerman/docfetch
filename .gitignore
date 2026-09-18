@@ -39,3 +39,6 @@ Desktop.ini
 
 # Local-only design docs (not tracked)
 docs/superpowers/
+
+.direnv/
+result/
